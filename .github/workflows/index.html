@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BotGrabber™ | HACYBERGLOBALTECH</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --bg:#05070d;
+  --card:#0b0f1a;
+  --primary:#00f0ff;
+  --secondary:#7a5cff;
+  --text:#fff;
+  --muted:#8b93a7;
+}
+body{
+  margin:0;
+  font-family:'Inter';
+  background:radial-gradient(circle at top,#0a0f2a,#05070d);
+  color:#fff;
+  text-align:center;
+}
+.container{padding:30px;max-width:1000px;margin:auto;}
+.card{
+  background:var(--card);
+  padding:20px;
+  margin:10px;
+  border-radius:10px;
+  cursor:pointer;
+}
+.card.active{
+  border:1px solid var(--primary);
+  box-shadow:0 0 15px var(--primary);
+}
+button{
+  padding:12px 20px;
+  margin:10px;
+  border:none;
+  border-radius:8px;
+  cursor:pointer;
+  background:linear-gradient(90deg,#00f0ff,#7a5cff);
+  color:#000;
+}
+input{padding:10px;margin:5px;width:250px;}
+table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:20px;
+}
+td,th{
+  border:1px solid rgba(255,255,255,0.1);
+  padding:10px;
+}
+#adminPanel{display:none;}
+</style>
+</head>
+
+<body>
+
+<h1>⚡ BotGrabber™</h1>
+
+<!-- AUTH -->
+<div class="container">
+<h2>Account</h2>
+<input id="email" placeholder="Email"><br>
+<input id="password" type="password" placeholder="Password"><br>
+<input id="telegram" placeholder="Telegram @username"><br>
+
+<button onclick="signup()">Sign Up</button>
+<button onclick="loginUser()">Login</button>
+<button onclick="logout()">Logout</button>
+</div>
+
+<!-- PLANS -->
+<div class="container">
+<h2>Select Plan</h2>
+
+<div class="card" onclick="selectPlan(this,'Bot Activation - $135.50')">Bot Activation</div>
+<div class="card" onclick="selectPlan(this,'2FA Activation - $75.40')">2FA Activation</div>
+
+<button onclick="createRequest()">Create Request</button>
+</div>
+
+<!-- PAYMENT -->
+<div class="container">
+<h2>Payment</h2>
+
+<input type="file" id="proof"><br>
+<button onclick="uploadProof()">Upload Proof</button>
+</div>
+
+<!-- USER DASHBOARD -->
+<div class="container">
+<h2>Dashboard</h2>
+<table id="userTable"></table>
+</div>
+
+<!-- ADMIN PANEL -->
+<div class="container" id="adminPanel">
+<h2>Admin Panel</h2>
+<table id="adminTable"></table>
+</div>
+
+<script type="module">
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, addDoc, query, where, getDocs, updateDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+
+/* 🔑 CONFIG */
+const firebaseConfig = {
+  apiKey: "YOUR_KEY",
+  authDomain: "YOUR_APP.firebaseapp.com",
+  projectId: "YOUR_ID",
+  storageBucket: "YOUR_APP.appspot.com"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
+
+/* ADMIN */
+const ADMIN_EMAIL = "your@email.com";
+
+/* TELEGRAM */
+const BOT_TOKEN = "YOUR_BOT_TOKEN";
+const CHAT_ID = "YOUR_CHAT_ID";
+
+async function notify(msg){
+  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      chat_id: CHAT_ID,
+      text: msg
+    })
+  });
+}
+
+function paymentMsg(plan){
+  return encodeURIComponent(
+`💳 Payment Instructions
+
+Plan: ${plan}
+
+Send via:
+Zelle / Apple Pay / CashApp / Venmo / PayPal / Chime / Gift Cards / Crypto
+
+Then upload proof.`
+  );
+}
+
+/* STATE */
+let user=null;
+let isAdmin=false;
+let selectedPlan=null;
+
+/* AUTH */
+window.signup=()=>createUserWithEmailAndPassword(auth,email.value,password.value);
+window.loginUser=()=>signInWithEmailAndPassword(auth,email.value,password.value);
+window.logout=()=>signOut(auth);
+
+onAuthStateChanged(auth,(u)=>{
+  user=u;
+  if(user){
+    isAdmin = user.email===ADMIN_EMAIL;
+    loadUser();
+    if(isAdmin) loadAdmin();
+  }
+});
+
+/* SELECT PLAN */
+window.selectPlan=(el,plan)=>{
+  document.querySelectorAll(".card").forEach(c=>c.classList.remove("active"));
+  el.classList.add("active");
+  selectedPlan=plan;
+};
+
+/* CREATE REQUEST */
+window.createRequest=async()=>{
+  if(!user) return alert("Login first");
+  if(!selectedPlan) return alert("Select plan");
+
+  await addDoc(collection(db,"requests"),{
+    userId:user.uid,
+    email:user.email,
+    telegram:telegram.value,
+    plan:selectedPlan,
+    status:"awaiting_payment",
+    proof:false
+  });
+
+  notify(`🚀 New Request\n${user.email}\n${selectedPlan}`);
+  loadUser();
+};
+
+/* LOAD USER */
+async function loadUser(){
+  const q=query(collection(db,"requests"),where("userId","==",user.uid));
+  const snap=await getDocs(q);
+
+  let html="<tr><th>Plan</th><th>Status</th><th>Proof</th></tr>";
+
+  snap.forEach(d=>{
+    const r=d.data();
+    html+=`<tr>
+      <td>${r.plan}</td>
+      <td>${r.status}</td>
+      <td>${r.proof?"✅":"❌"}</td>
+    </tr>`;
+  });
+
+  userTable.innerHTML=html;
+}
+
+/* ADMIN LOAD */
+async function loadAdmin(){
+  adminPanel.style.display="block";
+
+  const snap=await getDocs(collection(db,"requests"));
+
+  let html="<tr><th>Email</th><th>Plan</th><th>Status</th><th>Proof</th><th>Action</th></tr>";
+
+  snap.forEach(d=>{
+    const r=d.data();
+
+    html+=`<tr>
+      <td>${r.email}</td>
+      <td>${r.plan}</td>
+      <td>${r.status}</td>
+      <td>${r.proof?"✅":"❌"}</td>
+      <td>
+        <button onclick="reqPay('${d.id}','${r.telegram}','${r.plan}')">💳</button>
+        <button onclick="approve('${d.id}',${r.proof})">✔</button>
+        <button onclick="reject('${d.id}')">✖</button>
+      </td>
+    </tr>`;
+  });
+
+  adminTable.innerHTML=html;
+}
+
+/* REQUEST PAYMENT */
+window.reqPay=async(id,tele,plan)=>{
+  await updateDoc(doc(db,"requests",id),{status:"payment_requested"});
+
+  notify(`💳 Payment Requested\n${plan}`);
+
+  window.open(`https://t.me/${tele.replace("@","")}?text=${paymentMsg(plan)}`);
+
+  loadAdmin();
+};
+
+/* APPROVE */
+window.approve=async(id,proof)=>{
+  if(!proof) return alert("No proof");
+
+  await updateDoc(doc(db,"requests",id),{status:"approved"});
+  notify(`✅ Approved`);
+  loadAdmin();
+};
+
+/* REJECT */
+window.reject=async(id)=>{
+  await updateDoc(doc(db,"requests",id),{status:"rejected"});
+  notify(`❌ Rejected`);
+  loadAdmin();
+};
+
+/* UPLOAD */
+window.uploadProof=async()=>{
+  const file=proof.files[0];
+  if(!file||!user) return;
+
+  const r=ref(storage,`proofs/${user.uid}/${Date.now()}`);
+  await uploadBytes(r,file);
+
+  const url=await getDownloadURL(r);
+
+  const q=query(collection(db,"requests"),where("userId","==",user.uid));
+  const snap=await getDocs(q);
+
+  snap.forEach(async d=>{
+    await updateDoc(doc(db,"requests",d.id),{
+      proof:true,
+      proofUrl:url
+    });
+  });
+
+  notify(`💳 Proof Uploaded\n${user.email}`);
+  loadUser();
+};
+
+</script>
+
+</body>
+</html>
